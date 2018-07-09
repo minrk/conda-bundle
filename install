@@ -1,0 +1,59 @@
+#!/usr/bin/env python
+"""bootstrap script to install bundled packages
+
+counterpart to conda-pack
+
+A copy of this script is staged with the installer,
+so it should run without any dependencies but the standard library.
+"""
+
+# This file is part of conda-bundle and released into the public domain
+
+import glob
+import os
+import pipes
+from subprocess import check_call
+
+here = os.path.dirname(__file__)
+
+conda_dir = os.environ.get("CONDA_DIR", "/opt/conda")
+
+
+def sh(cmd):
+    """Run a shell command"""
+    print("> " + " ".join(map(pipes.quote, cmd)))
+    check_call(cmd)
+
+
+def install_miniconda(path=conda_dir, batch=True):
+    """install miniconda from bundled miniconda.sh installer"""
+    print(f"Installing conda in {path}")
+    cmd = ["bash", os.path.join(here, "install-miniconda.sh"), "-p", path]
+    if batch:
+        cmd.append('-b')
+    sh(cmd)
+
+
+def unbundle_packages(env_dir=conda_dir, bundle_dir=here):
+    """install bundled conda and/or pip binaries"""
+    conda_pkgs = glob.glob(os.path.join(bundle_dir, "conda-pkgs", "*"))
+    pip_wheels = glob.glob(os.path.join(bundle_dir, "wheels", "*.whl"))
+    if conda_pkgs:
+        print("Installing bundled conda packages")
+        sh([os.path.join(env_dir, "bin", "conda"), "install", "-yq", "-p", env_dir] + conda_pkgs)
+    if pip_wheels:
+        print("Installing bundled pip packages")
+        sh([os.path.join(env_dir, "bin", "pip"), "install"] + pip_wheels)
+
+
+def main():
+    """The main install entrypoint.
+
+    Bootstraps miniconda and unbundles binaries
+    """
+    install_miniconda(conda_dir)
+    unbundle_packages(conda_dir)
+
+
+if __name__ == "__main__":
+    main()

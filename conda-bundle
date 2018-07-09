@@ -1,0 +1,152 @@
+#!/usr/bin/env python
+
+import glob
+import hashlib
+import json
+import os
+import pipes
+import shutil
+from subprocess import check_call
+import sys
+import tempfile
+from textwrap import dedent
+
+import conda
+from ruamel_yaml import YAML
+
+yaml = YAML()
+
+# progressbar is provided by progressbar2 on PyPI
+from progressbar import DataTransferBar
+from requests_download import download, HashTracker, ProgressTracker
+
+conda_pkg_dir = os.path.join(sys.prefix, "pkgs")
+here = os.path.dirname(__file__)
+bootstrap = os.path.join(here, "bootstrap")
+install = os.path.join(here, "install")
+
+
+def sh(cmd):
+    print("> " + " ".join(map(pipes.quote, cmd)))
+    check_call(cmd)
+
+
+def install_env(env_file):
+    """Make a conda env in a temporary directory"""
+    wd = tempfile.TemporaryDirectory().name
+    sh(["conda", "env", "create", "-f", env_file, "-p", wd])
+    return wd
+
+
+def bundle_pip(env_file, env_dir, dest_dir):
+    """Make pip wheels"""
+    with open(env_file) as f:
+        env_spec = yaml.load(f)
+    env_py = os.path.join(env_dir, "bin", "python")
+    pip_reqs = None
+    for dep in env_spec.get("dependencies", []):
+        if isinstance(dep, dict) and dep.get("pip"):
+            pip_reqs = dep["pip"]
+            break
+    wheel_dir = os.path.join(dest_dir, "wheels")
+    if pip_reqs:
+        sh([env_py, "-m", "pip", "wheel", "-w", wheel_dir] + pip_reqs)
+
+
+def download_pkg(pkg_info, dest_dir):
+    """Download a file into a directory"""
+    if not os.path.exists(dest_dir):
+        os.makedirs(dest_dir)
+    fname = pkg_info["url"].rsplit("/", 1)[-1]
+    dest = os.path.join(dest_dir, fname)
+    with open(
+        os.path.join(pkg_info["extracted_package_dir"], "info", "repodata_record.json")
+    ) as f:
+        repodata = json.load(f)
+    md5 = repodata["md5"]
+    if os.path.exists(dest):
+        # verify checksum
+        hasher = hashlib.md5()
+        with open(dest, "rb") as f:
+            chunk = True
+            while chunk:
+                chunk = f.read(65535)
+                hasher.update(chunk)
+        digest = hasher.hexdigest()
+        if digest == md5:
+            print(f"Already have {dest}")
+            return dest
+        else:
+            print(f"Removing checksum-mismatch {dest} md5 {digest} != {md5}")
+            os.remove(dest)
+
+    downloaded = os.path.join(conda_pkg_dir, fname)
+    if os.path.exists(downloaded):
+        print(f"Copying {downloaded} → {dest}")
+        shutil.copy(downloaded, dest)
+    else:
+        url = pkg_info["url"]
+        print(f"Downloading {url} → {dest}")
+        hasher = HashTracker(hashlib.md5())
+        progress = ProgressTracker(DataTransferBar())
+        download(url, dest, trackers=(progress, hasher))
+        digest = hasher.hashobj.hexdigest()
+        if digest != md5:
+            raise ValueError(f"Downloaded {url} md5 mismatch {digest} != {md5}")
+    return dest
+
+
+def bundle_env(env_path, dest_dir):
+    """Bundle the packages in an env"""
+    conda_meta = os.path.join(env_path, "conda-meta")
+    for pkg in glob.glob(os.path.join(conda_meta, "*.json")):
+        with open(pkg) as f:
+            pkg_info = json.load(f)
+            download_pkg(pkg_info, os.path.join(dest_dir, "conda-pkgs"))
+
+
+def bundle_pkgs(env_file, dest_dir="."):
+    """Given a conda environment.yml, construct a local copy of its pip and/or conda packages"""
+    env_dir = install_env(env_file)
+    bundle_pip(env_file, env_dir, dest_dir)
+    bundle_env(env_dir, dest_dir)
+
+
+def make_installer(env_file, miniconda_version="latest", dest_dir="bundle"):
+    """Make a full installer"""
+    # make directory
+    if not os.path.exists(dest_dir):
+        os.makedirs(dest_dir)
+    # download miniconda
+    if sys.platform == "darwin":
+        plat = "MacOSX-x86_64"
+    else:
+        plat = "Linux-x86_64"
+    url = (
+        f"https://repo.continuum.io/miniconda/Miniconda3-{miniconda_version}-{plat}.sh"
+    )
+    progress = ProgressTracker(DataTransferBar())
+    install_miniconda = os.path.join(dest_dir, "install-miniconda.sh")
+    print(f"Downloading {url} → {install_miniconda}")
+    download(url, install_miniconda, trackers=(progress,))
+    # stage bootstrap scripts
+    shutil.copy(install, os.path.join(dest_dir, 'install'))
+    sh(['chmod', '+x', os.path.join(dest_dir, 'install')])
+    # bundle packages
+    bundle_pkgs(env_file, dest_dir)
+    # construct archive
+    tarball = dest_dir + ".tar.gz"
+    sh(["tar", "-czf", tarball, dest_dir])
+    print(f"Your installer archive is now at {tarball}")
+    print(dedent(f"""
+        To use your installer:
+
+            tar -xzf {tarball}
+            bash {os.path.basename(dest_dir)}/install
+
+        """
+    ))
+
+
+if __name__ == "__main__":
+    make_installer("environment.yml")
