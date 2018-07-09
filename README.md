@@ -1,4 +1,4 @@
-# conda-bundler
+# conda-bundle
 
 Lightweight alternative to [conda constructor](https://github.com/conda/constructor).
 
@@ -15,7 +15,7 @@ This is a simpler version of constructor (that actually relies on the constructo
 - rely on existing bootstrap of conda itself, to eliminate any limitations relative to `conda install`
 - record the results of `conda env create -f environment.yml`
 - pack up the results (conda packages and pip wheels)
-- bundle them up in a directory with an installer script
+- bundle them up in a directory with an installer script and make a .tar.gz archive
 
 The result should be a directory you can pack up and distribute for single-command offline installation.
 
