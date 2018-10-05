@@ -27,7 +27,7 @@ def sh(cmd):
 
 def install_miniconda(path=conda_dir, batch=True):
     """install miniconda from bundled miniconda.sh installer"""
-    print(f"Installing conda in {path}")
+    print("Installing conda in {path}")
     cmd = ["bash", os.path.join(here, "install-miniconda.sh"), "-p", path]
     if batch:
         cmd.append('-b')
